@@ -13,7 +13,12 @@ from torch import nn
 
 from nanoGPT.config import train_shakespeare_char
 from nanoGPT.model import GPTConfig
-from train import run_training
+
+try:
+    from train_ipu import run_training
+
+except ImportError:  # not on IPU...
+    from train import run_training
 
 
 def config_dict_from_module(module) -> Dict[str, Any]:
