@@ -1,6 +1,9 @@
 # Copyright (c) 2023 Graphcore Ltd. All rights reserved.
 
 import inspect
+import os
+import subprocess
+import sys
 from typing import Any, Dict
 
 import matplotlib.axes
@@ -33,24 +36,34 @@ config = GPTConfig(**_model_config_dict)
 
 
 def _gen_experiment_name(model: nn.Module) -> str:
-    name = model.__class__.__name__.lower()
     backend_names = [b.__qualname__ for b in getattr(model, "backends", [])]
     print(backend_names)
     if backend_names:
         us = any("unit_scaling" in b for b in backend_names)
         fp8 = any("quantisation" in b for b in backend_names)
         if us and not fp8:
-            return f"unit_scaled_{name}"
+            return f"unit_scaled_gpt"
         if fp8 and not us:
-            return f"fp8_{name}"
+            return f"fp8_gpt"
         if us and fp8:
-            return f"unit_scaled_fp8_{name}"
-    return name
+            return f"unit_scaled_fp8_gpt"
+    return "gpt"
+
+
+data_dir = "nanoGPT/data/shakespeare_char"
+
+
+def download_train_data():
+    cwd = os.getcwd()
+    os.chdir(data_dir)
+    print(f"Downloading training data to: {data_dir}")
+    subprocess.run(["python", "prepare.py"])
+    os.chdir(cwd)
 
 
 def plot(df: pd.DataFrame) -> matplotlib.axes.Axes:
     sns.set_theme()
-    p = sns.lineplot(data=df, x="Steps", y="Loss", hue="Format", style="Train/Valid")
+    p = sns.lineplot(data=df, x="Steps", y="Loss", style="Train/Valid")
     p.set(xlim=(100, None), ylim=(None, 3.0))
     return p
 
@@ -58,8 +71,12 @@ def plot(df: pd.DataFrame) -> matplotlib.axes.Axes:
 def train(model: nn.Module) -> None:
     experiment_name = _gen_experiment_name(model)
 
-    # TODO: remove this for final notebook
-    wandb.init("unit-scaling-demo")
+    if not os.path.exists(f"{data_dir}/train.bin"):
+        download_train_data()
+
+    # TODO: remove these lines for final notebook (or do we want wandb there?)
+    import wandb
+
     cfg = {
         **_general_config_dict,
         **{
@@ -72,7 +89,17 @@ def train(model: nn.Module) -> None:
             "experiment_name": experiment_name,
         },
     }
+    wandb.init(project="unit-scaling-demo", config=cfg)
 
+    if experiment_name == "unit_scaled_fp8_gpt":
+        cfg.update(
+            {
+                "learning_rate": 2**-6,
+                "min_lr": 2**-6 / 10,
+            }
+        )
+
+    print(f"Training {experiment_name} ...")
     results = run_training(model, cfg, experiment_name)
     train_df = pd.DataFrame.from_dict(
         {
@@ -89,5 +116,4 @@ def train(model: nn.Module) -> None:
     train_df["Train/Valid"] = "Train"
     valid_df["Train/Valid"] = "Valid"
     df = pd.concat([train_df, valid_df])
-    df["Format"] = experiment_name
     plot(df)
