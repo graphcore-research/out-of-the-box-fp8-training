@@ -3,7 +3,6 @@
 import inspect
 import os
 import subprocess
-import sys
 from typing import Any, Dict
 
 import matplotlib.axes
@@ -73,39 +72,25 @@ def plot(df: pd.DataFrame) -> matplotlib.axes.Axes:
     return p
 
 
-def train(model: nn.Module) -> None:
+def train(model: nn.Module, **config_overrides: Any) -> None:
     experiment_name = _gen_experiment_name(model)
 
     if not os.path.exists(f"{data_dir}/train.bin"):
         download_train_data()
 
-    # TODO: remove these lines for final notebook (or do we want wandb there?)
-    import wandb
-
-    cfg = {
-        **_general_config_dict,
-        **{
-            # "device": "cpu",
-            "max_iters": 200,
-            "eval_interval": 201,
-            "wandb_log": True,
-            "wandb_project": "unit-scaling-demo",
-            "wandb_run_name": None,
-            "experiment_name": experiment_name,
-        },
-    }
-    wandb.init(project="unit-scaling-demo", config=cfg)
-
+    cfg = _general_config_dict.copy()
+    cfg.update(
+        eval_interval=1000,
+        wandb_log=True,
+        wandb_project="unit-scaling-demo",
+        experiment_name=experiment_name,
+    )
     if experiment_name == "unit_scaled_fp8_gpt":
-        cfg.update(
-            {
-                "learning_rate": 2**-6,
-                "min_lr": 2**-6 / 10,
-            }
-        )
+        cfg.update(learning_rate=2**-6, min_lr=2**-6 / 10)
+    cfg.update(config_overrides)
 
     print(f"Training {experiment_name} ...")
-    results = run_training(model, cfg, experiment_name)
+    results = run_training(model, cfg)
     train_df = pd.DataFrame.from_dict(
         {
             "Steps": results["train"]["iters"],
