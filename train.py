@@ -73,7 +73,7 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps'
 dtype = 'float32'
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
-def run_training(model=None, config_dict=None, experiment_name=None):
+def run_training(model=None, config_dict=None):
     global device, gradient_accumulation_steps
     config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
     if not config_dict:
@@ -246,6 +246,7 @@ def run_training(model=None, config_dict=None, experiment_name=None):
     # logging
     if wandb_log and master_process:
         import wandb
+        wandb.init(project=wandb_project, config=config_dict)
 
     # training loop
     X, Y = get_batch('train') # fetch the very first batch
