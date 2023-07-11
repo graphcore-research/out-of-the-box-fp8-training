@@ -51,7 +51,7 @@ def run_training(
         **{**IPU_CONFIG_DEFAULTS, **config_dict}, model=model.config.__dict__
     )
     if cfg.wandb_log:
-        wandb.init(project=cfg.wandb_project, config=cfg.__dict__)
+        wandb.init(project=cfg.wandb_project, config=cfg.__dict__, reinit=True)
 
     if cfg.profile:
         profile = Path("profiles/latest")
