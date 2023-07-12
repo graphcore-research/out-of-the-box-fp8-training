@@ -41,7 +41,6 @@ config = GPTConfig(**_model_config_dict)
 
 def _gen_experiment_name(model: nn.Module) -> str:
     backend_names = [b.__qualname__ for b in getattr(model, "backends", [])]
-    print(backend_names)
     if backend_names:
         us = any("unit_scaling" in b for b in backend_names)
         fp8 = any("quantisation" in b for b in backend_names)
@@ -73,7 +72,9 @@ def plot(df: pd.DataFrame) -> matplotlib.axes.Axes:
 
 
 def train(model: nn.Module, **config_overrides: Any) -> None:
-    experiment_name = _gen_experiment_name(model)
+    experiment_name = _gen_experiment_name(model) + config_overrides.pop(
+        "experiment_name_suffix", ""
+    )
 
     if not os.path.exists(f"{data_dir}/train.bin"):
         download_train_data()
