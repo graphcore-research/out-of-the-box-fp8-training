@@ -65,7 +65,7 @@ grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 decay_lr = True # whether to decay the learning rate
 warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
-min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+min_lr_fac = 1/10#6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
@@ -107,7 +107,10 @@ def run_training(model=None, config_dict=None):
 
     if master_process:
         os.makedirs(out_dir, exist_ok=True)
-    torch.manual_seed(1337 + seed_offset)
+    import random
+    torch.manual_seed(config_dict["seed"])
+    random.seed(config_dict["seed"])
+    np.random.seed(config_dict["seed"])
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
     device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
@@ -230,23 +233,23 @@ def run_training(model=None, config_dict=None):
         return out
 
     # learning rate decay scheduler (cosine with warmup)
-    def get_lr(it):
+    def get_lr(it, base_lr):
         # 1) linear warmup for warmup_iters steps
         if it < warmup_iters:
-            return learning_rate * it / warmup_iters
+            return base_lr * it / warmup_iters
         # 2) if it > lr_decay_iters, return min learning rate
         if it > lr_decay_iters:
-            return min_lr
+            return min_lr_fac * base_lr
         # 3) in between, use cosine decay down to min learning rate
         decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
         assert 0 <= decay_ratio <= 1
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-        return min_lr + coeff * (learning_rate - min_lr)
+        return (min_lr_fac + coeff * (1 - min_lr_fac)) * base_lr
 
     # logging
     if wandb_log and master_process:
         import wandb
-        wandb.init(project=wandb_project, config=config_dict)
+        wandb.init(project=wandb_project, config=config_dict, reinit=True)
 
     # training loop
     X, Y = get_batch('train') # fetch the very first batch
@@ -264,12 +267,17 @@ def run_training(model=None, config_dict=None):
             "losses": [],
         },
     }
+    
+    base_lrs = [group['lr'] for group in optimizer.param_groups]
     while True:
 
         # determine and set the learning rate for this iteration
-        lr = get_lr(iter_num) if decay_lr else learning_rate
-        for param_group in optimizer.param_groups:
+        lrs = []
+        for base_lr, param_group in zip(base_lrs, optimizer.param_groups):
+            lr = get_lr(iter_num, base_lr) if decay_lr else learning_rate
+            lrs.append(lr)
             param_group['lr'] = lr
+        print("lrs:", lrs)
 
         # evaluate the loss on train/val sets and write checkpoints
         if iter_num % eval_interval == 0 and master_process:
@@ -279,7 +287,7 @@ def run_training(model=None, config_dict=None):
                 wandb.log({
                     "iter": iter_num,
                     "val/loss": losses['val'],
-                    "lr": lr,
+                    # "lr": lr,
                     "mfu": running_mfu*100, # convert to percentage
                 })
             if losses['val'] < best_val_loss or always_save_checkpoint:
@@ -345,7 +353,7 @@ def run_training(model=None, config_dict=None):
                     {
                         "iter": iter_num,
                         "train/loss": lossf,
-                        "lr": lr,
+                        # "lr": lr,
                         "mfu": running_mfu * 100,  # convert to percentage
                     }
                 )

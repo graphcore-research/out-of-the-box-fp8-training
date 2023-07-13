@@ -1,0 +1,8 @@
+program: runner.py
+method: bayes
+metric:
+  name: train/loss
+  goal: minimize
+parameters:
+  seed:
+    values: [1, 2, 3, 4]
