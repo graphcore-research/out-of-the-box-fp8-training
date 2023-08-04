@@ -2,3 +2,6 @@ __pycache__
 .venv
 .vscode
 
+/local
+/profiles
+/wandb
