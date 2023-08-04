@@ -81,8 +81,8 @@ def run_training(
     }
 
     def get_batch(split: str) -> Tuple[Tensor, Tensor]:
-        idx = torch.randint(len(data[split]) - cfg.block_size, (cfg.batch_size,))
-        tokens = torch.stack([data[split][i : i + cfg.block_size] for i in idx]).to(
+        idx = torch.randint(len(data[split]) - cfg.block_size - 1, (cfg.batch_size,))
+        tokens = torch.stack([data[split][i : i + cfg.block_size + 1] for i in idx]).to(
             torch.long
         )
         return tokens[:, :-1].contiguous(), tokens[:, 1:].contiguous()
