@@ -4,10 +4,9 @@ import json
 import os
 from argparse import Namespace
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
-import poptorch
 import torch
 import tqdm
 import wandb
@@ -15,6 +14,11 @@ from torch import Tensor, nn
 from torch.fx.graph_module import GraphModule
 
 import unit_scaling.transforms.utils
+
+try:
+    import poptorch
+except ImportError:
+    poptorch = None
 
 IPU_CONFIG_DEFAULTS = dict(
     compute_batch_size=4,
@@ -42,6 +46,37 @@ def prepare_for_ipu(module: nn.Module, example_inputs: List[Tensor]) -> GraphMod
     # on IPU, since TorchDynamo doesn't support IpuTensor
     module(*example_inputs)
     return graph_module
+
+
+class TorchSession:
+    def __init__(self, model: nn.Module, optimiser: Optional[torch.optim.Optimizer]):
+        self.model = model
+        self.optimiser = optimiser
+        if torch.cuda.is_available():
+            self.model.cuda()
+            self.cuda = True
+        else:
+            self.cuda = False
+
+    def __call__(self, *args: Tensor) -> Tuple[Tensor, Tensor]:
+        if self.cuda:
+            args = tuple(a.cuda() for a in args)
+        if self.optimiser:
+            self.optimiser.zero_grad()
+        out, loss = self.model(*args)
+        if self.optimiser:
+            loss.backward()
+            self.optimiser.step()
+        return out.cpu().detach(), loss.cpu().detach()
+
+    def detachFromDevice(self) -> None:
+        pass
+
+    def destroy(self) -> None:
+        pass
+
+    def setOptimizer(self, optimiser: torch.optim.Optimizer) -> None:
+        self.optimiser = optimiser
 
 
 def run_training(
@@ -94,25 +129,34 @@ def run_training(
         progress = (step - cfg.warmup_iters) / (cfg.max_iters - cfg.warmup_iters)
         return min_ratio + (1 - min_ratio) * (0.5 + 0.5 * np.cos(np.pi * progress))
 
-    model = prepare_for_ipu(
-        model, [t[: cfg.compute_batch_size] for t in get_batch("val")]
-    )
-    options = poptorch.Options()
-    options.replicationFactor(cfg.replication_factor)
-    options.outputMode(poptorch.OutputMode.All)
-    training_options, inference_options = options.clone(), options.clone()
-    iterations = cfg.batch_size // (cfg.compute_batch_size * options.replication_factor)
-    training_options.Training.gradientAccumulation(iterations)
-    inference_options.deviceIterations(iterations)
-    opt = poptorch.optim.Adam(
+    if poptorch:
+        model = prepare_for_ipu(
+            model, [t[: cfg.compute_batch_size] for t in get_batch("val")]
+        )
+    adam = poptorch.optim.Adam if poptorch else torch.optim.Adam
+    opt = adam(
         model.parameters(),
         lr=cfg.learning_rate,
         betas=(0.9, cfg.beta2),
+        # max_grad_norm=10.0,
         # loss_scaling=cfg.compute_batch_size / cfg.batch_size,  # match CPU/GPU behaviour
     )
     lr_schedule = torch.optim.lr_scheduler.LambdaLR(opt, lr_schedule_fn)
-    trainer = poptorch.trainingModel(model, options=training_options, optimizer=opt)
-    evaluator = poptorch.inferenceModel(model, options=inference_options)
+    if poptorch:
+        options = poptorch.Options()
+        options.replicationFactor(cfg.replication_factor)
+        options.outputMode(poptorch.OutputMode.All)
+        training_options, inference_options = options.clone(), options.clone()
+        iterations = cfg.batch_size // (
+            cfg.compute_batch_size * options.replication_factor
+        )
+        training_options.Training.gradientAccumulation(iterations)
+        inference_options.deviceIterations(iterations)
+        trainer = poptorch.trainingModel(model, options=training_options, optimizer=opt)
+        evaluator = poptorch.inferenceModel(model, options=inference_options)
+    else:
+        trainer = TorchSession(model, opt)
+        evaluator = TorchSession(model, None)
 
     results = {
         "train": {"iters": [], "losses": []},
