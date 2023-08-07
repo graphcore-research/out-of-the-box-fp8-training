@@ -9,11 +9,13 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import poptorch
 import torch
+import torch.nn.functional as F
 import tqdm
 import wandb
 from torch import Tensor, nn
 from torch.fx.graph_module import GraphModule
 
+import unit_scaling.functional as U
 import unit_scaling.transforms.utils
 
 IPU_CONFIG_DEFAULTS = dict(
@@ -23,24 +25,70 @@ IPU_CONFIG_DEFAULTS = dict(
 )
 
 
-def prepare_for_ipu(module: nn.Module, example_inputs: List[Tensor]) -> GraphModule:
+def gradient_accumulation_loss(
+    loss: Tensor, batch_size: int, compute_batch_size: int
+) -> Tensor:
+    loss = loss * compute_batch_size / batch_size
+    return poptorch.identity_loss(loss, reduction="none")
+
+
+def unit_scaled_gradient_accumulation_loss(
+    loss: Tensor, batch_size: int, compute_batch_size: int
+) -> Tensor:
+    loss = U.scale_fwd(loss, compute_batch_size / batch_size)
+    return poptorch.identity_loss(loss, reduction="none")
+
+
+def prepare_for_ipu(
+    module: nn.Module, example_inputs: List[Tensor], batch_size: int
+) -> GraphModule:
     """Trace the module on CPU, ready for execution on IPU."""
     graph_module: GraphModule
 
     def _backend(gm: GraphModule, example_inputs: List[Tensor]) -> GraphModule:
-        # The model will be traced on CPU, so we should convert any device="cpu"
-        # constant tensors to device="ipu".
-        for n in gm.graph.nodes:
-            if n.kwargs.get("device") == torch.device("cpu"):
-                n.kwargs = {**n.kwargs, "device": torch.device("ipu:0")}
         nonlocal graph_module
         graph_module = gm
-        return gm
+
+        # Gradient accumulation sums loss gradients over multiple compute batches.
+        # Here we apply a scaling factor to each compute batch loss to get the sum()
+        # to equal the global batch loss, behaving the same as plain training
+        # (without gradient accumulation).
+        loss_replacement_map = {
+            F.cross_entropy: gradient_accumulation_loss,
+            U.cross_entropy: unit_scaled_gradient_accumulation_loss,
+        }
+        loss = None
+        for n in graph_module.graph.nodes:
+            if n.target in loss_replacement_map:
+                with graph_module.graph.inserting_after(n):
+                    loss = graph_module.graph.call_function(
+                        loss_replacement_map[n.target],
+                        args=(n,),
+                        kwargs=dict(
+                            batch_size=batch_size,
+                            compute_batch_size=example_inputs[0].shape[0],
+                        ),
+                    )
+            if n.target == "output":
+                assert loss, "expected to find a 'cross_entropy' node before 'output'"
+                n.replace_input_with(n.args[0][1], loss)
+
+        graph_module.graph.lint()
+        graph_module.recompile()
+        return graph_module
 
     module = unit_scaling.transforms.utils.apply_transform(module, _backend)
     # Run a forward pass on CPU to trigger compilation, but use the underlying graph_module
     # on IPU, since TorchDynamo doesn't support IpuTensor
     module(*example_inputs)
+
+    # The model was traced on CPU, so we should convert any device="cpu" constant tensors
+    # to device="ipu".
+    for n in graph_module.graph.nodes:
+        if n.kwargs.get("device") == torch.device("cpu"):
+            n.kwargs = {**n.kwargs, "device": torch.device("ipu:0")}
+    graph_module.recompile()
+
     return graph_module
 
 
@@ -95,7 +143,9 @@ def run_training(
         return min_ratio + (1 - min_ratio) * (0.5 + 0.5 * np.cos(np.pi * progress))
 
     model = prepare_for_ipu(
-        model, [t[: cfg.compute_batch_size] for t in get_batch("val")]
+        model,
+        [t[: cfg.compute_batch_size] for t in get_batch("val")],
+        cfg.batch_size,
     )
     options = poptorch.Options()
     options.replicationFactor(cfg.replication_factor)
@@ -126,14 +176,14 @@ def run_training(
             if iter_num:
                 trainer.detachFromDevice()
             losses = [evaluator(*get_batch("val"))[1] for _ in range(cfg.eval_iters)]
-            val_loss = float(torch.mean(torch.stack(losses)))
+            val_loss = float(torch.sum(torch.stack(losses)))
             results["valid"]["losses"].append(val_loss)
             results["valid"]["iters"].append(iter_num)
             if cfg.wandb_log:
                 wandb.log(dict(val_loss=val_loss, step=iter_num), step=iter_num)
             evaluator.detachFromDevice()
         if iter_num < cfg.max_iters:
-            loss = float(torch.mean(trainer(*get_batch("train"))[1]))
+            loss = float(torch.sum(trainer(*get_batch("train"))[1]))
             results["train"]["losses"].append(loss)
             results["train"]["iters"].append(iter_num)
             if cfg.wandb_log:

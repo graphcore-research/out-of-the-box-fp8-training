@@ -86,7 +86,7 @@ def train(model: nn.Module, **config_overrides: Any) -> None:
         wandb_project="unit-scaling-demo",
         experiment_name=experiment_name,
     )
-    if experiment_name == "unit_scaled_fp8_gpt":
+    if experiment_name.startswith("unit_scaled_fp8_gpt"):
         cfg.update(learning_rate=2**-6, min_lr=2**-6 / 10)
     cfg.update(config_overrides)
 
