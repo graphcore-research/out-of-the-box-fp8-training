@@ -11,12 +11,16 @@ import poptorch
 import torch
 import torch.nn.functional as F
 import tqdm
-import wandb
+import unit_scaling.functional as U
+import unit_scaling.transforms.utils
 from torch import Tensor, nn
 from torch.fx.graph_module import GraphModule
 
-import unit_scaling.functional as U
-import unit_scaling.transforms.utils
+DEFAULT_CONFIGS = dict(
+    beta1=0.9,
+    weight_decay=1e-1,
+)
+
 
 IPU_CONFIG_DEFAULTS = dict(
     compute_batch_size=4,
@@ -96,9 +100,12 @@ def run_training(
     model: nn.Module, config_dict: Dict[str, Any]
 ) -> Dict[str, Dict[str, List[float]]]:
     cfg = Namespace(
-        **{**IPU_CONFIG_DEFAULTS, **config_dict}, model=model.config.__dict__
+        **{**IPU_CONFIG_DEFAULTS, **DEFAULT_CONFIGS, **config_dict},
+        model=model.config.__dict__,
     )
     if cfg.wandb_log:
+        import wandb
+
         wandb.init(project=cfg.wandb_project, config=cfg.__dict__, reinit=True)
 
     if cfg.profile:
@@ -135,6 +142,32 @@ def run_training(
         )
         return tokens[:, :-1].contiguous(), tokens[:, 1:].contiguous()
 
+    def configure_optimizers(model, weight_decay, learning_rate, betas):
+        # start with all of the candidate parameters
+        param_dict = {pn: p for pn, p in model.named_parameters()}
+        # filter out those that do not require grad
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": nodecay_params, "weight_decay": 0.0},
+        ]
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        print(
+            f"num decayed parameter tensors: {len(decay_params)}, with"
+            f" {num_decay_params:,} parameters"
+        )
+        print(
+            f"num non-decayed parameter tensors: {len(nodecay_params)}, with"
+            f" {num_nodecay_params:,} parameters"
+        )
+        optimizer = poptorch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+        return optimizer
+
     def lr_schedule_fn(step: int) -> float:
         if step < cfg.warmup_iters:
             return step / cfg.warmup_iters
@@ -154,11 +187,8 @@ def run_training(
     iterations = cfg.batch_size // (cfg.compute_batch_size * options.replication_factor)
     training_options.Training.gradientAccumulation(iterations)
     inference_options.deviceIterations(iterations)
-    opt = poptorch.optim.Adam(
-        model.parameters(),
-        lr=cfg.learning_rate,
-        betas=(0.9, cfg.beta2),
-        # loss_scaling=cfg.compute_batch_size / cfg.batch_size,  # match CPU/GPU behaviour
+    opt = configure_optimizers(
+        model, cfg.weight_decay, cfg.learning_rate, betas=(cfg.beta1, cfg.beta2)
     )
     lr_schedule = torch.optim.lr_scheduler.LambdaLR(opt, lr_schedule_fn)
     trainer = poptorch.trainingModel(model, options=training_options, optimizer=opt)
@@ -176,7 +206,7 @@ def run_training(
             if iter_num:
                 trainer.detachFromDevice()
             losses = [evaluator(*get_batch("val"))[1] for _ in range(cfg.eval_iters)]
-            val_loss = float(torch.sum(torch.stack(losses)))
+            val_loss = float(torch.sum(torch.stack(losses))) / cfg.eval_iters
             results["valid"]["losses"].append(val_loss)
             results["valid"]["iters"].append(iter_num)
             if cfg.wandb_log:
@@ -184,10 +214,11 @@ def run_training(
             evaluator.detachFromDevice()
         if iter_num < cfg.max_iters:
             loss = float(torch.sum(trainer(*get_batch("train"))[1]))
-            results["train"]["losses"].append(loss)
-            results["train"]["iters"].append(iter_num)
-            if cfg.wandb_log:
-                wandb.log(dict(loss=loss, step=iter_num), step=iter_num)
+            if iter_num % cfg.log_interval == 0:
+                results["train"]["losses"].append(loss)
+                results["train"]["iters"].append(iter_num)
+                if cfg.wandb_log:
+                    wandb.log(dict(loss=loss, step=iter_num), step=iter_num)
             lr_schedule.step()
             trainer.setOptimizer(opt)
             iter_num += 1

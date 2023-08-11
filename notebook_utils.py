@@ -104,8 +104,17 @@ class NanoGPTTokenizer:
 
 def plot(df: pd.DataFrame, name: str) -> matplotlib.axes.Axes:
     sns.set_theme()
-    ax = sns.lineplot(data=df, x="Steps", y="Loss", style="Train/Valid", label=name)
-    ax.set(xlim=(0, None), ylim=(None, 3.0))
+    ax = sns.lineplot(
+        data=df,
+        x="Steps",
+        y="Loss",
+        style="Train/Valid",
+        label=name,
+        solid_joinstyle="miter",
+        solid_capstyle="butt",
+        linewidth=1.5,
+    )
+    ax.set(xlim=(0, None), ylim=(0.6, 3.0))
 
     # remove duplicate legend entries
     entries = {}
