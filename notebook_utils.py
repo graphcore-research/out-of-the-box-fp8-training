@@ -49,7 +49,11 @@ for key, value in _general_config_dict.items():
 
 
 def _gen_experiment_name(model: nn.Module) -> str:
-    backend_names = [b.__qualname__ for b in getattr(model, "backends", [])]
+    backend_names = [
+        b.__qualname__
+        for b in getattr(model, "backends", [])
+        if hasattr(b, "__qualname__")
+    ]
     if backend_names:
         us = any("unit_scaling" in b for b in backend_names)
         fp8 = any("quantisation" in b for b in backend_names)
