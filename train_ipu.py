@@ -155,18 +155,7 @@ def run_training(
             {"params": decay_params, "weight_decay": weight_decay},
             {"params": nodecay_params, "weight_decay": 0.0},
         ]
-        num_decay_params = sum(p.numel() for p in decay_params)
-        num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(
-            f"num decayed parameter tensors: {len(decay_params)}, with"
-            f" {num_decay_params:,} parameters"
-        )
-        print(
-            f"num non-decayed parameter tensors: {len(nodecay_params)}, with"
-            f" {num_nodecay_params:,} parameters"
-        )
-        optimizer = poptorch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
-        return optimizer
+        return poptorch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
 
     def lr_schedule_fn(step: int) -> float:
         if step < cfg.warmup_iters:
