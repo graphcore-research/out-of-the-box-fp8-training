@@ -21,3 +21,5 @@ Note that the notebook & library work cross-platform, so can also be run on CPU/
 ## License
 
 Copyright (c) 2023 Graphcore Ltd. Licensed under the MIT License.
+
+This repository includes modified code from [nanoGPT](https://github.com/karpathy/nanoGPT), Copyright (c) 2022 Andrej Karpathy (`train.py`). It also includes nanoGPT as a submodule.
