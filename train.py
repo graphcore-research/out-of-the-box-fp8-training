@@ -1,3 +1,8 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
+# This file is modified from nanoGPT (https://github.com/karpathy/nanoGPT),
+# Copyright (c) 2022 Andrej Karpathy.
+
 """
 This training script can be run both on a single gpu in debug mode,
 and also in a larger training run with distributed data parallel (ddp).
