@@ -155,9 +155,7 @@ def run_training(
             {"params": decay_params, "weight_decay": weight_decay},
             {"params": nodecay_params, "weight_decay": 0.0},
         ]
-        optimizer = poptorch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
-        optimizer._step_count = 1
-        return optimizer
+        return poptorch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
 
     def lr_schedule_fn(step: int) -> float:
         if step < cfg.warmup_iters:
@@ -182,6 +180,7 @@ def run_training(
         model, cfg.weight_decay, cfg.learning_rate, betas=(cfg.beta1, cfg.beta2)
     )
     lr_schedule = torch.optim.lr_scheduler.LambdaLR(opt, lr_schedule_fn)
+    opt._step_count = 1
     trainer = poptorch.trainingModel(model, options=training_options, optimizer=opt)
     evaluator = poptorch.inferenceModel(model, options=inference_options)
 
