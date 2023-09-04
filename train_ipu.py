@@ -180,6 +180,7 @@ def run_training(
         model, cfg.weight_decay, cfg.learning_rate, betas=(cfg.beta1, cfg.beta2)
     )
     lr_schedule = torch.optim.lr_scheduler.LambdaLR(opt, lr_schedule_fn)
+    opt._step_count = 1
     trainer = poptorch.trainingModel(model, options=training_options, optimizer=opt)
     evaluator = poptorch.inferenceModel(model, options=inference_options)
 
