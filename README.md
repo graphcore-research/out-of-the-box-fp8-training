@@ -14,8 +14,6 @@ This provides a demo of using the `unit_scaling` library, showing how a model ca
 
 ## Running the notebook
 
-To speed up training, users can run for free on IPU: [![Run on Gradient](https://assets.paperspace.io/img/gradient-badge.svg)](https://console.paperspace.com/github/graphcore-research/out-of-the-box-fp8-training?container=graphcore/pytorch-paperspace%3A3.3.0-ubuntu-20.04-20230703&machine=Free-IPU-POD4&file=out_of_the_box_fp8_training.ipynb)
-
 Note that the notebook & library work cross-platform, so can also be run on CPU/GPU.
 
 ## License
