@@ -108,29 +108,29 @@ class NanoGPTTokenizer:
 
 def plot(df: pd.DataFrame, name: str) -> matplotlib.axes.Axes:
     sns.set_theme()
-    ax = sns.lineplot(
-        data=df,
-        x="Steps",
-        y="Loss",
-        style="Train/Valid",
-        label=name,
-        solid_joinstyle="miter",
-        solid_capstyle="butt",
-        linewidth=1.5,
-    )
-    ax.set(xlim=(0, None), ylim=(0.6, 3.0))
-
-    # remove duplicate legend entries
-    entries = {}
-    for h, l in zip(*ax.get_legend_handles_labels()):
-        if l not in entries:
-            entries[l] = h
-    entries[""] = plt.Line2D([0], [0], marker="none", linestyle="none", color="none")
-    entries["validation"] = entries.pop("validation")  # move to bottom
-    entries["training"] = entries.pop("training")  # move to bottom
-    ax.legend(
-        entries.values(), entries.keys(), bbox_to_anchor=(1.05, 1), loc="upper left"
-    )
+    ax = plt.gca()
+    hue = ax._get_lines.get_next_color()
+    for kind, d in df.groupby("Train/Valid"):
+        ax.plot(
+            d["Steps"],
+            d["Loss"],
+            solid_joinstyle="miter",
+            solid_capstyle="butt",
+            linewidth=1.5,
+            color=hue,
+            label=name if kind == "training" else None,
+            ls=dict(training="-", validation="--")[kind],
+        )
+    handles, labels = ax.get_legend_handles_labels()
+    if "training" not in labels:
+        handles += [
+            plt.Line2D([0], [0], c="none", marker="none", ls="none"),
+            plt.Line2D([0], [0], c="k", ls="-"),
+            plt.Line2D([0], [0], c="k", ls="--"),
+        ]
+        labels += ["", "training", "validation"]
+    ax.legend(handles, labels, loc="upper left", bbox_to_anchor=(1.05, 1.0))
+    ax.set(xlim=(0, None), ylim=(0.6, 3.0), xlabel="Steps", ylabel="Loss")
     return ax
 
 
@@ -176,3 +176,4 @@ def train(model: nn.Module, **config_overrides: Any) -> pd.DataFrame:
     df = pd.concat([train_df, valid_df])
     df["Model"] = experiment_name
     plot(df, experiment_name)
+    return df
