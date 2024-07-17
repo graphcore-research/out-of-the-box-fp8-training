@@ -1,4 +1,4 @@
 seaborn
 tqdm
 torch
-git+https://github.com/graphcore-research/unit-scaling.git
+git+https://github.com/graphcore-research/unit-scaling.git@0a6c9af811eeb89ad2026b7bac04d2a3f0cccc24
